@@ -2,7 +2,8 @@
 pragma solidity ^0.8.19;
 
 import "./Orderbook.sol";
-import "./MatchingEngineErrors.sol";
+import "./errors/MatchingEngineErrors.sol";
+import "./events/EventfulMatchingEngine.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
 /// @title A price-time priority matching engine
@@ -11,7 +12,8 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 contract MatchingEngine is 
     OrderBook,
     MatchingEngineErrors,
-    ReentrancyGuard {
+    ReentrancyGuard,
+    EventfulMatchingEngine {
     
     /// @dev Node for doubly linked list
     struct Node {
@@ -268,6 +270,7 @@ contract MatchingEngine is
                         dllPosition = _findInsertPosition(priceRatio, biggerToken, 1);  // 1 for ask
                     } else {  // Order is correct
                         _insertFirstOrder(id, 1);  // 1 for ask
+                        emit MakerOrderCreated(id, 1);
                         return;
                     }
                 } else if (orders[asks[0].next].biggerToken == 2 && biggerToken == 2) {
@@ -275,6 +278,7 @@ contract MatchingEngine is
                         dllPosition = _findInsertPosition(priceRatio, biggerToken, 1);  // 1 for ask
                     } else {  // Order is correct
                         _insertFirstOrder(id, 1);  // 1 for ask
+                        emit MakerOrderCreated(id, 1);
                         return;
                     }
                 } else if (orders[asks[0].next].biggerToken == 1 && biggerToken == 2) {  // Always a worse order
@@ -282,6 +286,7 @@ contract MatchingEngine is
                 } else {  // orders[asks[0].id].biggerToken == 2 && biggerToken == 1
                     // Proposed position is correct, insert at front
                     _insertFirstOrder(id, 1);  // 1 for ask
+                    emit MakerOrderCreated(id, 1);
                     return;
                 }
             } else if (dllPosition == 0) {  // Order is proposed to be added to back of orderbook (worst order)
@@ -327,7 +332,6 @@ contract MatchingEngine is
             }
             // Insert ask at dllPosition in DLL
             _insertOrderAtPosition(dllPosition, id, 1);  // 1 for ask
-            return;
         } else {  // Selling token 2; bids
             if (dllPosition == 1 || bids[dllPosition].prev == 0) {  // Try and add bid to the front
                 if (orders[bids[0].next].biggerToken == 1 && biggerToken == 1) {
@@ -335,6 +339,7 @@ contract MatchingEngine is
                         dllPosition = _findInsertPosition(priceRatio, biggerToken, 0);  // 0 for bid
                     } else {  // Order is correct
                         _insertFirstOrder(id, 0);  // 0 for bid
+                        emit MakerOrderCreated(id, 1);
                         return;
                     }
                 } else if (orders[bids[0].next].biggerToken == 2 && biggerToken == 2) {
@@ -342,6 +347,7 @@ contract MatchingEngine is
                         dllPosition = _findInsertPosition(priceRatio, biggerToken, 0);  // 0 for bid
                     } else {  // Order is correct
                         _insertFirstOrder(id, 0);  // 0 for bid
+                        emit MakerOrderCreated(id, 1);
                         return;
                     }
                 } else if (orders[bids[0].next].biggerToken == 2 && biggerToken == 1) {  // Always a worse order
@@ -349,6 +355,7 @@ contract MatchingEngine is
                 } else {  // orders[bids[0].id].biggerToken == 1 && biggerToken == 2
                     // Proposed position is correct, insert at front
                     _insertFirstOrder(id, 0);  // 0 for bid
+                    emit MakerOrderCreated(id, 1);
                     return;
                 }
             } else if (dllPosition == 0) {  // Order is proposed to be added to back of orderbook (worst order)
@@ -394,8 +401,8 @@ contract MatchingEngine is
             }
             // Insert bid at dllPosition in DLL
             _insertOrderAtPosition(dllPosition, id, 0);  // 0 for bid
-            return;
         }
+        emit MakerOrderCreated(id, dllPosition);
     }
 
     /// @notice Finds the position to insert the proposed order into its respective sorted DLL 
@@ -530,6 +537,8 @@ contract MatchingEngine is
                 curr = asks[curr.next];
             }
         }
+
+        emit TakerOrder(tokenAmt, spendingToken1);
     }
 
     /// @notice Public entrypoint for canceling an order
@@ -564,7 +573,7 @@ contract MatchingEngine is
             priceRatio = token2Amt * 1_000_000_000_000_000 / token1Amt;
         }
 
-        (token1Amt, token2Amt) = _buyAmountLessThanRatio(
+        (uint128 token1AmtNew, uint128 token2AmtNew) = _buyAmountLessThanRatio(
             priceRatio,
             biggerToken,
             sellingToken1,
@@ -572,7 +581,11 @@ contract MatchingEngine is
             token2Amt
         );
 
-        // emit events();
+        emit IoCOrder(
+            token1Amt - token1AmtNew,
+            token2Amt - token2AmtNew,
+            sellingToken1
+        );
     }
 
     /// @notice Attempts to execute a fill or kill (FoC) order for the amount specified for less than the price specified
@@ -591,7 +604,7 @@ contract MatchingEngine is
             priceRatio = token2Amt * 1_000_000_000_000_000 / token1Amt;
         }
 
-        (token1Amt, token2Amt) = _buyAmountLessThanRatio(
+        (uint128 token1AmtNew, uint128 token2AmtNew) = _buyAmountLessThanRatio(
             priceRatio,
             biggerToken,
             sellingToken1,
@@ -601,11 +614,15 @@ contract MatchingEngine is
 
         // If whole quantity of order didn't execute, revert the order
         if (sellingToken1 == 1) {
-            if (token1Amt != 0) revert FillOrKillNotFilled();
+            if (token1AmtNew != 0) revert FillOrKillNotFilled();
         } else {  // Selling token2
-            if (token2Amt != 0) revert FillOrKillNotFilled();
+            if (token2AmtNew != 0) revert FillOrKillNotFilled();
         }
 
-        // emit events();
+        emit FoKOrder(
+            token1Amt - token1AmtNew,
+            token2Amt - token2AmtNew,
+            sellingToken1
+        );
     }
 }
